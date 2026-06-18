@@ -126,6 +126,35 @@ docs/PLAN.md
 - A sample Notion page covering: nested toggles, colors, inline+block LaTeX, images,
   subpages — used as the end-to-end golden test.
 
-## 10. Open decisions
+## 10. Resolved decisions
 
-See the questions in the kickoff discussion; tracked here as they're resolved.
+- **Notion source:** Official Notion API only (free internal-integration token). No HTML-export
+  path for v1. → drives §4, §3.
+- **Sync trigger:** Manual "Sync now" button **plus** an optional background auto-sync timer
+  with a user-configurable interval (default e.g. 15 min, no lower bound enforced — this is the
+  feature notion2anki paywalls). → §6.
+- **Note type:** Single custom 3-field model `Front / Back / Extra` (§5). Cloze support is a
+  later enhancement, not in the core milestones.
+- **License:** AGPL-3.0 (keeps derivatives open; matches Anki/2anki ethos). Changeable on request.
+
+## 11. Build handoff (read this first if you're building in a fresh session)
+
+This plan is the spec. Build order is the milestones in §8 (M1 → M8). Notes for the builder:
+
+- **Target Anki:** 2.1.x on the modern Qt6 stack. Use the `anki` (collection) and `aqt`
+  (GUI) packages that ship inside Anki — do not pip-install Anki. Test by symlinking/copying
+  `notion_to_anki/` into Anki's `addons21/` folder.
+- **No AI anywhere** in the pipeline — pure deterministic parsing. Hard requirement.
+- **Dependencies:** prefer the Python stdlib (`urllib`, `json`). Anki bundles `requests`;
+  use it only if convenient. Do **not** require AnkiConnect — write to the collection directly.
+- **Notion API specifics to verify against current docs (api.notion.com, version header
+  `Notion-Version`):** block pagination via `start_cursor`/`has_more`; toggle children are
+  fetched with a separate `GET /blocks/{id}/children`; `image` blocks expose either
+  `external.url` or a time-limited `file.url` (download immediately); inline LaTeX arrives as
+  `rich_text` items of type `equation`, block LaTeX as an `equation` block.
+- **LaTeX:** emit MathJax delimiters (`\( \)`, `\[ \]`); do not invoke the legacy LaTeX/dvipng
+  pipeline — MathJax avoids install/rendering issues.
+- **Idempotency is critical:** persist the `notion_block_id → note GUID` map in `user_files/`
+  (survives add-on updates) so re-syncs update, never duplicate. Never auto-delete cards.
+- **Secrets:** the Notion token lives in Anki's add-on config / `user_files/`, never committed.
+- Land tests (§9) alongside each converter using saved Notion JSON fixtures (offline).
