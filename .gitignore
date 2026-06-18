@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Anki add-on packaging
+*.ankiaddon
+user_files/
+meta.json
+
+# Secrets — never commit your Notion token
+.env
+secrets.json
+config.local.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
