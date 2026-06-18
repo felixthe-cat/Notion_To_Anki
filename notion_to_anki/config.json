@@ -1,0 +1,8 @@
+{
+  "notion_token": "",
+  "page_ids": [],
+  "auto_sync_enabled": false,
+  "auto_sync_interval_minutes": 15,
+  "deck_root": "",
+  "on_source_deleted": "ignore"
+}
