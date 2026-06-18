@@ -1,0 +1,12 @@
+{
+  "object": "page",
+  "id": "abc123",
+  "properties": {
+    "title": {
+      "type": "title",
+      "title": [
+        {"plain_text": "Biology", "type": "text", "text": {"content": "Biology"}, "annotations": {}}
+      ]
+    }
+  }
+}

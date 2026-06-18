@@ -1,0 +1,34 @@
+[
+  {
+    "id": "block-001",
+    "type": "toggle",
+    "has_children": true,
+    "toggle": {
+      "rich_text": [
+        {"type": "text", "text": {"content": "What is mitosis?"}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}}
+      ]
+    },
+    "children": [
+      {
+        "id": "block-002",
+        "type": "paragraph",
+        "has_children": false,
+        "paragraph": {
+          "rich_text": [
+            {"type": "text", "text": {"content": "Cell division that produces two identical daughter cells."}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}}
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "id": "block-003",
+    "type": "paragraph",
+    "has_children": false,
+    "paragraph": {
+      "rich_text": [
+        {"type": "text", "text": {"content": "This paragraph is not a toggle and should be skipped."}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}}
+      ]
+    }
+  }
+]

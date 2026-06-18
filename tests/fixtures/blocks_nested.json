@@ -1,0 +1,46 @@
+[
+  {
+    "id": "block-010",
+    "type": "toggle",
+    "has_children": true,
+    "toggle": {
+      "rich_text": [
+        {"type": "text", "text": {"content": "What are the phases of mitosis?"}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}}
+      ]
+    },
+    "children": [
+      {
+        "id": "block-011",
+        "type": "paragraph",
+        "has_children": false,
+        "paragraph": {
+          "rich_text": [
+            {"type": "text", "text": {"content": "There are four main phases."}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}}
+          ]
+        }
+      },
+      {
+        "id": "block-012",
+        "type": "toggle",
+        "has_children": true,
+        "toggle": {
+          "rich_text": [
+            {"type": "text", "text": {"content": "What is prophase?"}, "annotations": {"bold": true, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}}
+          ]
+        },
+        "children": [
+          {
+            "id": "block-013",
+            "type": "paragraph",
+            "has_children": false,
+            "paragraph": {
+              "rich_text": [
+                {"type": "text", "text": {"content": "Chromatin condenses into chromosomes."}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}}
+              ]
+            }
+          }
+        ]
+      }
+    ]
+  }
+]

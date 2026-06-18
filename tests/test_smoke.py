@@ -1,8 +1,4 @@
-"""Smoke tests — verify the pure (non-Anki) modules import without a running Anki.
-
-Real unit tests for the converters (with recorded Notion JSON fixtures) land alongside
-each milestone; see docs/PLAN.md §9.
-"""
+"""Smoke tests — verify the pure (non-Anki) modules import without a running Anki."""
 
 
 def test_convert_modules_import():

@@ -1,18 +1,29 @@
-"""Thin Notion REST client.
+"""Thin Notion REST client using stdlib urllib.
 
-Wraps the official Notion API (https://api.notion.com/v1) using the stdlib (``urllib``).
-Sends the ``Authorization: Bearer <token>`` and ``Notion-Version`` headers. Handles JSON
-decoding, error responses, and rate-limit (HTTP 429) retry/backoff.
+Wraps the official Notion API (https://api.notion.com/v1).
+Sends Authorization: Bearer and Notion-Version headers.
+Handles JSON decoding, error responses, and 429 retry/backoff.
 
 Endpoints used:
-  * GET /pages/{id}          → page metadata (title for deck name)
-  * GET /blocks/{id}/children → paginated child blocks
+  * GET /pages/{id}             → page metadata (title for deck name)
+  * GET /blocks/{id}/children   → paginated child blocks
 """
-
 from __future__ import annotations
 
+import json
+import time
+import urllib.request
+import urllib.error
+
 NOTION_API_BASE = "https://api.notion.com/v1"
-NOTION_VERSION = "2022-06-28"  # TODO(builder): confirm latest stable version header
+NOTION_VERSION = "2022-06-28"
+
+_MAX_RETRIES = 3
+_RETRY_BASE_DELAY = 1.0  # seconds; doubled on each 429
+
+
+class NotionError(Exception):
+    """Raised when the Notion API returns a non-2xx status code."""
 
 
 class NotionClient:
@@ -22,9 +33,51 @@ class NotionClient:
         self.token = token
 
     def get_page(self, page_id: str) -> dict:
-        """Return the page object (used for its title)."""
-        raise NotImplementedError  # TODO(M2)
+        """Return the page object (contains title in properties)."""
+        return self._get(f"/pages/{page_id}")
 
     def get_block_children(self, block_id: str) -> list[dict]:
-        """Return all child blocks of a block/page, transparently following pagination."""
-        raise NotImplementedError  # TODO(M2)
+        """Return all child blocks, transparently following pagination."""
+        results: list[dict] = []
+        params: dict = {}
+        while True:
+            data = self._get(f"/blocks/{block_id}/children", params=params)
+            results.extend(data.get("results", []))
+            if not data.get("has_more"):
+                break
+            params["start_cursor"] = data["next_cursor"]
+        return results
+
+    def _get(self, path: str, params: dict | None = None) -> dict:
+        url = NOTION_API_BASE + path
+        if params:
+            query = "&".join(f"{k}={v}" for k, v in params.items())
+            url = f"{url}?{query}"
+
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Notion-Version": NOTION_VERSION,
+                "Content-Type": "application/json",
+            },
+        )
+
+        delay = _RETRY_BASE_DELAY
+        for attempt in range(_MAX_RETRIES):
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    return json.loads(resp.read().decode())
+            except urllib.error.HTTPError as exc:
+                if exc.code == 429 and attempt < _MAX_RETRIES - 1:
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                body = ""
+                try:
+                    body = exc.read().decode()
+                except Exception:
+                    pass
+                raise NotionError(f"Notion API {exc.code}: {body}") from exc
+        # should be unreachable
+        raise NotionError("Max retries exceeded")

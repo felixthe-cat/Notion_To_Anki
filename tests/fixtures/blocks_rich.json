@@ -1,0 +1,48 @@
+[
+  {
+    "id": "block-020",
+    "type": "toggle",
+    "has_children": true,
+    "toggle": {
+      "rich_text": [
+        {"type": "text", "text": {"content": "Rich formatting card"}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}}
+      ]
+    },
+    "children": [
+      {
+        "id": "block-021",
+        "type": "paragraph",
+        "has_children": false,
+        "paragraph": {
+          "rich_text": [
+            {"type": "text", "text": {"content": "Bold"}, "annotations": {"bold": true, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}},
+            {"type": "text", "text": {"content": " and "}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}},
+            {"type": "text", "text": {"content": "italic"}, "annotations": {"bold": false, "italic": true, "strikethrough": false, "underline": false, "code": false, "color": "default"}},
+            {"type": "text", "text": {"content": " text with "}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}},
+            {"type": "text", "text": {"content": "code"}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": true, "color": "default"}}
+          ]
+        }
+      },
+      {
+        "id": "block-022",
+        "type": "paragraph",
+        "has_children": false,
+        "paragraph": {
+          "rich_text": [
+            {"type": "text", "text": {"content": "Red text"}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "red"}},
+            {"type": "text", "text": {"content": " and "}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "default"}},
+            {"type": "text", "text": {"content": "highlighted"}, "annotations": {"bold": false, "italic": false, "strikethrough": false, "underline": false, "code": false, "color": "yellow_background"}}
+          ]
+        }
+      },
+      {
+        "id": "block-023",
+        "type": "equation",
+        "has_children": false,
+        "equation": {
+          "expression": "E = mc^2"
+        }
+      }
+    ]
+  }
+]
