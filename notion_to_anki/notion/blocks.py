@@ -34,3 +34,10 @@ def get_page_title(page: dict) -> str:
 
     # Fallback for pages whose title can't be found (shouldn't happen for normal pages)
     return "Untitled"
+
+
+def get_database_title(database: dict) -> str:
+    """Extract a plain-text title from a Notion database object."""
+    title_arr = database.get("title", [])
+    text = "".join(rt.get("plain_text", "") for rt in title_arr).strip()
+    return text or "Untitled"
