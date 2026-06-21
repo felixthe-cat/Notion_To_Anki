@@ -24,6 +24,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 
+class SyncCancelledError(Exception):
+    """Raised when the user requests cancellation mid-sync."""
+    def __init__(self, partial_result: "SyncResult") -> None:
+        super().__init__("Sync stopped by user")
+        self.partial_result = partial_result
+
+
 @dataclass
 class SyncResult:
     """Summary of a completed sync run."""
@@ -40,6 +47,7 @@ def run_sync(
     col=None,
     config: dict | None = None,
     progress_cb=None,
+    cancel_event=None,
 ) -> SyncResult:
     """Run a full sync. Returns a SyncResult summary.
 
@@ -129,6 +137,8 @@ def run_sync(
             _report(_pg_prefix() + f"'{deck_name}'  —  scanning...")
 
         def _card_progress():
+            if cancel_event and cancel_event.is_set():
+                raise SyncCancelledError(result)
             _pg["card_n"] += 1
             _report(
                 _pg_prefix()
@@ -191,6 +201,8 @@ def run_sync(
 
         # 4. Recurse into child pages / databases
         for block in blocks:
+            if cancel_event and cancel_event.is_set():
+                raise SyncCancelledError(result)
             btype = block.get("type")
             child_id = block.get("id", "")
             if not child_id:
@@ -234,6 +246,8 @@ def run_sync(
 
     total_pages = len(page_ids or [])
     for i, notion_id in enumerate(page_ids or [], start=1):
+        if cancel_event and cancel_event.is_set():
+            raise SyncCancelledError(result)
         _pg["num"] = i
         _pg["card_n"] = 0
         _pg["card_total"] = 0

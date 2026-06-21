@@ -908,30 +908,67 @@ def _extract_page_id(value: str) -> str:
 # ---------------------------------------------------------------------------
 
 def on_sync_now_clicked(parent=None, on_complete=None) -> None:
-    """Run a sync in the background, showing a live progress dialog, then a summary."""
+    """Run a sync in the background with a cancellable progress dialog."""
     try:
         from aqt import mw  # type: ignore
         from aqt.utils import showInfo, showCritical  # type: ignore
         from aqt.operations import QueryOp  # type: ignore
+        from aqt.qt import (  # type: ignore
+            QDialog, QVBoxLayout, QLabel, QPushButton, Qt
+        )
+        import threading
     except ImportError:
         raise RuntimeError("aqt not available")
 
-    from .sync import run_sync
+    from .sync import run_sync, SyncCancelledError
 
+    cancel_event = threading.Event()
+
+    # ---- Custom progress dialog with Stop button ----
+    prog_dlg = QDialog(parent or mw)
+    prog_dlg.setWindowTitle("NotionSync for Anki")
+    prog_dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+    prog_dlg.setMinimumWidth(440)
+    prog_dlg.setWindowFlags(
+        prog_dlg.windowFlags() & ~Qt.WindowType.WindowCloseButtonHint
+    )
+    _layout = QVBoxLayout(prog_dlg)
+    _layout.setSpacing(12)
+    _layout.setContentsMargins(18, 18, 18, 18)
+
+    prog_lbl = QLabel("Starting sync…")
+    prog_lbl.setWordWrap(True)
+    prog_lbl.setMinimumHeight(48)
+    prog_lbl.setStyleSheet("font-size:12px;")
+    _layout.addWidget(prog_lbl)
+
+    stop_btn = QPushButton("⏹  Stop Sync")
+    stop_btn.setStyleSheet(_BTN_RED)
+
+    def _on_stop_clicked() -> None:
+        cancel_event.set()
+        stop_btn.setEnabled(False)
+        stop_btn.setText("Stopping…")
+        prog_lbl.setText("Stopping — finishing the current card, then saving…")
+
+    stop_btn.clicked.connect(_on_stop_clicked)
+    _layout.addWidget(stop_btn)
+    prog_dlg.show()
+
+    # ---- Background sync ----
     def _progress_cb(msg: str) -> None:
-        """Called from the background thread — post label update to the main thread."""
         try:
-            mw.taskman.run_on_main(
-                lambda: mw.progress.update(label=f"Notion → Anki\n\n{msg}")
-            )
+            mw.taskman.run_on_main(lambda: prog_lbl.setText(msg))
         except Exception:
             pass
 
     def _background(_col) -> object:
         cfg = mw.addonManager.getConfig(_ADDON_NAME) or {}
-        return run_sync(col=mw.col, config=cfg, progress_cb=_progress_cb)
+        return run_sync(col=mw.col, config=cfg, progress_cb=_progress_cb,
+                        cancel_event=cancel_event)
 
-    def _on_success(result) -> None:
+    def _finish(result, *, stopped: bool = False) -> None:
+        prog_dlg.close()
         _save_sync_status(
             success=True,
             added=result.added, updated=result.updated,
@@ -944,24 +981,35 @@ def on_sync_now_clicked(parent=None, on_complete=None) -> None:
             except Exception:
                 pass
         total = result.added + result.updated
-        msg = f"Sync complete!\n\n{total} card{'s' if total != 1 else ''} synced  ·  {result.added} new  ·  {result.updated} updated"
+        prefix = "Sync stopped." if stopped else "Sync complete!"
+        msg = (
+            f"{prefix}\n\n"
+            f"{total} card{'s' if total != 1 else ''} synced"
+            f"  ·  {result.added} new  ·  {result.updated} updated"
+        )
         if result.errors:
             msg += f"\n\n{len(result.errors)} error(s):\n" + "\n".join(result.errors[:5])
         showInfo(msg, parent=parent, title="NotionSync for Anki")
 
+    def _on_success(result) -> None:
+        _finish(result, stopped=False)
+
     def _on_failure(exc: Exception) -> None:
-        _save_sync_status(success=False, error_msg=str(exc))
-        if on_complete:
-            try:
-                on_complete()
-            except Exception:
-                pass
-        showCritical(str(exc), parent=parent, title="NotionSync for Anki — Error")
+        if isinstance(exc, SyncCancelledError):
+            _finish(exc.partial_result, stopped=True)
+        else:
+            prog_dlg.close()
+            _save_sync_status(success=False, error_msg=str(exc))
+            if on_complete:
+                try:
+                    on_complete()
+                except Exception:
+                    pass
+            showCritical(str(exc), parent=parent, title="NotionSync for Anki — Error")
 
     (
         QueryOp(parent=mw, op=_background, success=_on_success)
         .failure(_on_failure)
-        .with_progress("Notion → Anki: starting sync…")
         .run_in_background()
     )
 
