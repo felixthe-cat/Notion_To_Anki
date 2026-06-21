@@ -63,6 +63,42 @@ def upsert_card(col, card, deck_id: int, model) -> str:
     return str(note.id)
 
 
+def upsert_cloze_card(col, card, deck_id: int, model) -> str:
+    """Add or update a cloze note. Returns the note id as a string."""
+    id_map = load_id_map()
+    block_id = card.notion_block_id
+
+    if block_id in id_map:
+        note_id = int(id_map[block_id])
+        try:
+            note = col.get_note(note_id)
+            _fill_cloze_note(note, card, model)
+            col.update_note(note)
+            return str(note_id)
+        except Exception:
+            pass
+
+    note = col.new_note(model)
+    _fill_cloze_note(note, card, model)
+    col.add_note(note, deck_id)
+
+    id_map[block_id] = str(note.id)
+    save_id_map(id_map)
+    return str(note.id)
+
+
+def _fill_cloze_note(note, card, model) -> None:
+    field_names = [f["name"] for f in model["flds"]]
+
+    def _set(name: str, value: str) -> None:
+        if name in field_names:
+            note[name] = value
+
+    _set("Text", card.text)
+    _set("Back Extra", card.back_extra)
+    _set("NotionBlockId", card.notion_block_id)
+
+
 def _fill_note(note, card, model) -> None:
     """Populate note fields from a Card, tolerating missing fields gracefully."""
     field_names = [f["name"] for f in model["flds"]]

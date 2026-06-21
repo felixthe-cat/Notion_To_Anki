@@ -9,7 +9,6 @@ from __future__ import annotations
 def ensure_deck(col, full_name: str) -> int:
     """Create the deck (and any missing parents) if needed; return its deck id."""
     did = col.decks.id(full_name)
-    col.decks.flush()
     return did
 
 

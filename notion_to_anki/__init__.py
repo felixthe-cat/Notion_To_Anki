@@ -19,14 +19,16 @@ try:
         open_config_dialog()
 
     def _setup_menu() -> None:
-        action = QAction("Notion → Anki", mw)
+        action = QAction("NotionSync for Anki", mw)
         action.triggered.connect(_open_dialog)
         mw.form.menuTools.addAction(action)
 
     def _on_profile_loaded() -> None:
+        import os
         from .ui import _restart_autosync_timer
         try:
-            config = mw.addonManager.getConfig("notion_to_anki") or {}
+            _name = os.path.basename(os.path.dirname(os.path.abspath(__file__)))
+            config = mw.addonManager.getConfig(_name) or {}
         except Exception:
             config = {}
         _restart_autosync_timer(config)

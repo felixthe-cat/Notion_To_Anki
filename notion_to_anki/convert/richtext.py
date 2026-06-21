@@ -152,6 +152,31 @@ def block_to_html(block: dict) -> str:
         inner_back = _render_children(children)
         return f"<details><summary>{inner_front}</summary>{inner_back}</details>"
 
+    if btype == "audio":
+        url = ""
+        if "file" in data:
+            url = data["file"].get("url", "")
+        elif "external" in data:
+            url = data["external"].get("url", "")
+        if url:
+            return f"[sound:{url}]"
+        return ""
+
+    if btype == "table":
+        children = block.get("children", [])
+        has_header = data.get("has_column_header", False)
+        rows_html: list[str] = []
+        for i, row in enumerate(children):
+            if row.get("type") != "table_row":
+                continue
+            cells = row.get("table_row", {}).get("cells", [])
+            tag = "th" if (has_header and i == 0) else "td"
+            cells_html = "".join(
+                f"<{tag}>{rich_text_to_html(cell)}</{tag}>" for cell in cells
+            )
+            rows_html.append(f"<tr>{cells_html}</tr>")
+        return f'<table border="1" style="border-collapse:collapse">{"".join(rows_html)}</table>'
+
     if btype == "table_of_contents":
         return ""
 

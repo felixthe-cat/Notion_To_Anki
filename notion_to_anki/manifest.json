@@ -1,0 +1,6 @@
+{
+    "package": "notion_to_anki",
+    "name": "NotionSync for Anki",
+    "human_version": "1.0.0",
+    "min_point_version": 231000
+}

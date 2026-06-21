@@ -11,6 +11,9 @@ from __future__ import annotations
 MODEL_NAME = "Notion Toggle (3-field)"
 FIELDS = ["Front", "Back", "Extra", "NotionBlockId"]
 
+CLOZE_MODEL_NAME = "Notion Cloze"
+CLOZE_FIELDS = ["Text", "Back Extra", "NotionBlockId"]
+
 _QFMT = "{{Front}}"
 
 _AFMT = """\
@@ -81,6 +84,36 @@ blockquote {
   padding: 4px 12px;
   color: #555;
 }"""
+
+
+_CLOZE_QFMT = "{{cloze:Text}}"
+_CLOZE_AFMT = (
+    "{{cloze:Text}}"
+    "{{#Back Extra}}<br><div class=\"notion-extra\">{{Back Extra}}</div>{{/Back Extra}}"
+)
+
+
+def ensure_cloze_model(col):
+    """Return the Cloze note type, creating it if it doesn't exist."""
+    existing = col.models.by_name(CLOZE_MODEL_NAME)
+    if existing:
+        return existing
+
+    model = col.models.new(CLOZE_MODEL_NAME)
+    model["type"] = 1  # Anki cloze model type
+
+    for field_name in CLOZE_FIELDS:
+        fld = col.models.new_field(field_name)
+        col.models.add_field(model, fld)
+
+    template = col.models.new_template("Cloze")
+    template["qfmt"] = _CLOZE_QFMT
+    template["afmt"] = _CLOZE_AFMT
+    col.models.add_template(model, template)
+
+    model["css"] = _CSS
+    col.models.add(model)
+    return col.models.by_name(CLOZE_MODEL_NAME)
 
 
 def ensure_model(col):
