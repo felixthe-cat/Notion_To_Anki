@@ -1,25 +1,53 @@
-# Notion_To_Anki
+# NotionSync for Anki
 
-A **free, open-source Anki add-on** that syncs a Notion page (and its subpages) into Anki
-flashcards — no AI, no paywall, no third-party server.
+**A free, open-source Anki add-on that syncs your Notion notes directly into Anki flashcards.**
+No AI, no paywall, no third-party server.
 
-It converts every top-level **toggle list** on a Notion page into a flashcard:
+📦 **[Get it on AnkiWeb → Add-on #1287017969](https://ankiweb.net/shared/info/1287017969)**
 
-- **Front** = the toggle heading
-- **Back** = the content inside the toggle
-- **Extra (3rd field)** = any *nested* toggles, each rendered inside a `<details>` block
-- **Deck** = the Notion page title; **subpages** become **subdecks**
+---
 
-Rich text formatting (bold, italics, colors, code), images, and LaTeX/MathJax are
-preserved and rendered without external dependencies.
+## What it does
 
-> Goal: match the full *paid* feature set of [notion2anki](https://www.notion2anki.com/en)
-> (unlimited pages, unlimited notes, fast auto-sync) but free for everyone.
+- 📄 Converts Notion **toggle lists** → Basic flashcards
+- 📊 Converts Notion **tables** → one card per row
+- 🗂️ Mirrors **nested pages** → nested Anki decks
+- 🧩 Supports **cloze deletion** with `{{c1::...}}` syntax
 
-## Status
+---
 
-🚧 Early development. See [`docs/PLAN.md`](docs/PLAN.md) for the implementation plan.
+## Setup
+
+1. Create a Notion integration at [notion.so/my-integrations](https://www.notion.so/my-integrations)
+2. Add your token in Anki under **Tools → NotionSync for Anki**
+3. Paste your Notion page IDs and sync
+
+---
+
+## How cards are built
+
+| Notion element | Anki output |
+|---|---|
+| Toggle heading | Front field |
+| Toggle body | Back field |
+| Nested toggles | Extra field (inside `<details>` blocks) |
+| Table row | One Basic card per row |
+| Subpage / child database | Subdeck |
+
+Rich text formatting (bold, italics, colours, code), images, and LaTeX/MathJax are preserved without any external dependencies.
+
+---
+
+## 💸 Completely free
+
+No subscriptions, no premium features, no paywalls. This is a full-featured alternative to paid services like [notion2anki.com](https://www.notion2anki.com/en).
+
+---
 
 ## License
 
 AGPL-3.0 — keeping this free and open for everyone.
+
+---
+
+🎓 Originally built to help a friend study — shared publicly so anyone can benefit.
