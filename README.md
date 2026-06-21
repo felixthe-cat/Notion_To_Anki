@@ -40,7 +40,7 @@ Rich text formatting (bold, italics, colours, code), images, and LaTeX/MathJax a
 
 ## 💸 Completely free
 
-No subscriptions, no premium features, no paywalls. This is a full-featured alternative to paid services like [notion2anki.com](https://www.notion2anki.com/en).
+No subscriptions, no premium features, no paywalls. 
 
 ---
 
