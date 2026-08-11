@@ -7,15 +7,22 @@ can work on plain nested dicts.
 from __future__ import annotations
 
 
+# Sub-pages and sub-databases are separate sync units — run_sync() recurses into
+# them itself to give each its own deck. Descending into them here as well meant
+# every page was re-downloaded once per ancestor (9 nested pages = 99 API calls).
+_OPAQUE_TYPES = {"child_page", "child_database"}
+
+
 def fetch_block_tree(client, block_id: str) -> list[dict]:
     """Recursively fetch block_id's children, attaching each block's children inline.
 
     Returns a list of block dicts where every block with has_children has a
     "children" key populated with its own (recursively fetched) child list.
+    child_page / child_database blocks are left unexpanded — see _OPAQUE_TYPES.
     """
     blocks = client.get_block_children(block_id)
     for block in blocks:
-        if block.get("has_children"):
+        if block.get("has_children") and block.get("type") not in _OPAQUE_TYPES:
             block["children"] = fetch_block_tree(client, block["id"])
     return blocks
 

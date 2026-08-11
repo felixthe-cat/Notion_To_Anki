@@ -89,7 +89,8 @@ def run_sync(
     from .convert.media import image_block_url, ingest_image, audio_block_url, ingest_audio
     from .anki_io.models import ensure_model, ensure_cloze_model
     from .anki_io.decks import ensure_deck, deck_name_for
-    from .anki_io.writer import upsert_card, upsert_cloze_card, load_id_map, save_id_map
+    from .anki_io.writer import (upsert_card, upsert_cloze_card, load_id_map,
+                                 save_id_map, index_existing_notes)
 
     def _report(msg: str) -> None:
         if progress_cb:
@@ -98,12 +99,22 @@ def run_sync(
             except Exception:
                 pass
 
+    result = SyncResult()
+
+    def _check_cancel() -> None:
+        """Cancellation point. Passed to the Notion client so that every HTTP
+        request and every retry back-off is an opportunity to stop."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise SyncCancelledError(result)
+
     _report("Initialising...")
-    client = NotionClient(token)
+    client = NotionClient(token, check_cancel=_check_cancel)
     model = ensure_model(col)
     cloze_model = ensure_cloze_model(col)
-    result = SyncResult()
     id_map = load_id_map()
+    # Notes already in the collection win over the cached file: the cache can be
+    # lost or overwritten, and trusting it alone re-adds every card as a duplicate.
+    id_map.update(index_existing_notes(col))
 
     # Mutable progress counters shared across closures
     _pg = {"num": 0, "card_n": 0, "card_total": 0}
@@ -137,8 +148,7 @@ def run_sync(
             _report(_pg_prefix() + f"'{deck_name}'  —  scanning...")
 
         def _card_progress():
-            if cancel_event and cancel_event.is_set():
-                raise SyncCancelledError(result)
+            _check_cancel()
             _pg["card_n"] += 1
             _report(
                 _pg_prefix()
@@ -155,15 +165,16 @@ def run_sync(
                     continue
                 card = _process_media(card, toggle_block, col,
                                       ingest_image, image_block_url,
-                                      ingest_audio, audio_block_url)
-                block_id = card.notion_block_id
-                was_known = block_id in id_map
-                note_id = upsert_card(col, card, deck_id, model)
-                id_map[block_id] = note_id
+                                      ingest_audio, audio_block_url,
+                                      _check_cancel, result.errors)
+                was_known = card.notion_block_id in id_map
+                upsert_card(col, card, deck_id, model, id_map)
                 if was_known:
                     result.updated += 1
                 else:
                     result.added += 1
+            except SyncCancelledError:
+                raise
             except Exception as exc:
                 result.errors.append(f"Block {toggle_block.get('id', '?')}: {exc}")
 
@@ -172,14 +183,14 @@ def run_sync(
             _card_progress()
             try:
                 card = block_to_cloze_card(cloze_block)
-                block_id = card.notion_block_id
-                was_known = block_id in id_map
-                note_id = upsert_cloze_card(col, card, deck_id, cloze_model)
-                id_map[block_id] = note_id
+                was_known = card.notion_block_id in id_map
+                upsert_cloze_card(col, card, deck_id, cloze_model, id_map)
                 if was_known:
                     result.updated += 1
                 else:
                     result.added += 1
+            except SyncCancelledError:
+                raise
             except Exception as exc:
                 result.errors.append(f"Cloze {cloze_block.get('id', '?')}: {exc}")
 
@@ -188,21 +199,20 @@ def run_sync(
             for card in table_to_cards(block):
                 _card_progress()
                 try:
-                    block_id = card.notion_block_id
-                    was_known = block_id in id_map
-                    note_id = upsert_card(col, card, deck_id, model)
-                    id_map[block_id] = note_id
+                    was_known = card.notion_block_id in id_map
+                    upsert_card(col, card, deck_id, model, id_map)
                     if was_known:
                         result.updated += 1
                     else:
                         result.added += 1
+                except SyncCancelledError:
+                    raise
                 except Exception as exc:
                     result.errors.append(f"Table row {card.notion_block_id}: {exc}")
 
         # 4. Recurse into child pages / databases
         for block in blocks:
-            if cancel_event and cancel_event.is_set():
-                raise SyncCancelledError(result)
+            _check_cancel()
             btype = block.get("type")
             child_id = block.get("id", "")
             if not child_id:
@@ -216,6 +226,8 @@ def run_sync(
         try:
             obj_type, title = _resolve_type_and_title(client, notion_id,
                                                        get_page_title, get_database_title)
+        except SyncCancelledError:
+            raise
         except Exception as exc:
             result.errors.append(f"ID {notion_id}: {exc}")
             return
@@ -227,11 +239,14 @@ def run_sync(
             _report(_pg_prefix() + f"Querying database '{title}'...")
             try:
                 pages = client.query_database(notion_id)
+            except SyncCancelledError:
+                raise
             except Exception as exc:
                 result.errors.append(f"Database {notion_id}: {exc}")
                 return
             _report(_pg_prefix() + f"Found {len(pages)} page{'s' if len(pages) != 1 else ''} in '{title}'")
             for page in pages:
+                _check_cancel()
                 page_id = page.get("id", "")
                 if page_id:
                     _sync_any(page_id, parent_deck_name=deck_name)
@@ -239,32 +254,42 @@ def run_sync(
             _report(_pg_prefix() + f"Downloading '{title}'...")
             try:
                 blocks = fetch_block_tree(client, notion_id)
+            except SyncCancelledError:
+                raise
             except Exception as exc:
                 result.errors.append(f"Blocks {notion_id}: {exc}")
                 return
             _add_cards_from_blocks(blocks, deck_id, deck_name)
 
     total_pages = len(page_ids or [])
-    for i, notion_id in enumerate(page_ids or [], start=1):
-        if cancel_event and cancel_event.is_set():
-            raise SyncCancelledError(result)
-        _pg["num"] = i
-        _pg["card_n"] = 0
-        _pg["card_total"] = 0
-        _report(f"Page {i} of {total_pages}  ·  Starting...")
-        _before = (result.added, result.updated, result.skipped, len(result.errors))
-        _sync_any(notion_id)
-        _after = (result.added, result.updated, result.skipped, len(result.errors))
-        result.per_page_results[notion_id] = {
-            "success": _after[3] == _before[3],
-            "added": _after[0] - _before[0],
-            "updated": _after[1] - _before[1],
-            "skipped": _after[2] - _before[2],
-            "error_count": _after[3] - _before[3],
-        }
+    try:
+        for i, notion_id in enumerate(page_ids or [], start=1):
+            _check_cancel()
+            _pg["num"] = i
+            _pg["card_n"] = 0
+            _pg["card_total"] = 0
+            _report(f"Page {i} of {total_pages}  ·  Starting...")
+            _before = (result.added, result.updated, result.skipped, len(result.errors))
+            _sync_any(notion_id)
+            _after = (result.added, result.updated, result.skipped, len(result.errors))
+            result.per_page_results[notion_id] = {
+                "success": _after[3] == _before[3],
+                "added": _after[0] - _before[0],
+                "updated": _after[1] - _before[1],
+                "skipped": _after[2] - _before[2],
+                "error_count": _after[3] - _before[3],
+            }
+    finally:
+        # Runs on cancellation too: notes already added are in the collection, so
+        # their ids must be persisted or the next sync re-adds them as duplicates.
+        # Never raise from here — an exception in a finally replaces the one in
+        # flight, which would surface a disk error instead of "Import stopped".
+        _report("Saving...")
+        try:
+            save_id_map(id_map)
+        except Exception as exc:
+            result.errors.append(f"Could not save the synced-card index: {exc}")
 
-    _report("Saving...")
-    save_id_map(id_map)
     return result
 
 
@@ -287,8 +312,19 @@ def _resolve_type_and_title(client, notion_id: str, get_page_title, get_database
 
 def _process_media(card, toggle_block: dict, col,
                    ingest_image, image_block_url,
-                   ingest_audio, audio_block_url) -> object:
+                   ingest_audio, audio_block_url,
+                   check_cancel=None, errors=None) -> object:
     """Download images/audio in the toggle's subtree and replace URLs with media filenames."""
+    from .convert.richtext import _escape_attr
+
+    def _cancel_point() -> None:
+        if check_cancel is not None:
+            check_cancel()
+
+    def _fail(kind: str, url: str, exc: Exception) -> None:
+        # Silently swallowing these is why broken images looked like a clean sync.
+        if errors is not None:
+            errors.append(f"{kind} download failed ({url.split('?')[0][-60:]}): {exc}")
 
     def _collect(blocks: list[dict]) -> list[tuple[str, str]]:
         replacements: list[tuple[str, str]] = []
@@ -297,25 +333,36 @@ def _process_media(card, toggle_block: dict, col,
             if btype == "image":
                 url = image_block_url(block)
                 if url:
+                    _cancel_point()  # a page of images is otherwise unstoppable
                     try:
                         filename = ingest_image(col, url)
                         replacements.append((url, filename))
-                    except Exception:
-                        pass
+                    except SyncCancelledError:
+                        raise
+                    except Exception as exc:
+                        _fail("Image", url, exc)
             elif btype == "audio":
                 url = audio_block_url(block)
                 if url:
+                    _cancel_point()
                     try:
                         filename = ingest_audio(col, url)
                         replacements.append((url, filename))
-                    except Exception:
-                        pass
+                    except SyncCancelledError:
+                        raise
+                    except Exception as exc:
+                        _fail("Audio", url, exc)
             for child in block.get("children", []):
                 replacements.extend(_collect([child]))
         return replacements
 
     for old_url, new_filename in _collect(toggle_block.get("children", [])):
-        card.back = card.back.replace(old_url, new_filename)
-        card.extra = card.extra.replace(old_url, new_filename)
+        # The renderer writes the URL into an HTML attribute via _escape_attr, so
+        # "&" in Notion's signed S3 links becomes "&amp;". Matching only the raw
+        # URL never hit, leaving every image pointing at a URL that expires in an
+        # hour. Replace the escaped form too — audio uses the raw form.
+        for variant in {_escape_attr(old_url), old_url}:
+            card.back = card.back.replace(variant, new_filename)
+            card.extra = card.extra.replace(variant, new_filename)
 
     return card

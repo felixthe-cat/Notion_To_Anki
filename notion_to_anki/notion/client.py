@@ -29,10 +29,28 @@ class NotionError(Exception):
 
 
 class NotionClient:
-    """Authenticated Notion API client."""
+    """Authenticated Notion API client.
 
-    def __init__(self, token: str) -> None:
+    check_cancel: optional zero-arg callable invoked before every request and
+    during retry back-off. It should raise to abort the run. Every network call
+    funnels through _get/_post, so this one hook makes the whole client — block
+    tree walks, database pagination, everything — promptly cancellable.
+    """
+
+    def __init__(self, token: str, check_cancel=None) -> None:
         self.token = token
+        self._check_cancel = check_cancel
+
+    def _cancel_point(self) -> None:
+        if self._check_cancel is not None:
+            self._check_cancel()
+
+    def _sleep(self, seconds: float) -> None:
+        """Back-off that wakes early if the run is cancelled."""
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            self._cancel_point()
+            time.sleep(min(0.2, deadline - time.monotonic()))
 
     def get_page(self, page_id: str) -> dict:
         """Return the page object (contains title in properties)."""
@@ -83,12 +101,13 @@ class NotionClient:
 
         delay = _RETRY_BASE_DELAY
         for attempt in range(_MAX_RETRIES):
+            self._cancel_point()
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     return json.loads(resp.read().decode())
             except urllib.error.HTTPError as exc:
                 if exc.code == 429 and attempt < _MAX_RETRIES - 1:
-                    time.sleep(delay)
+                    self._sleep(delay)
                     delay *= 2
                     continue
                 body = ""
@@ -114,12 +133,13 @@ class NotionClient:
         )
         delay = _RETRY_BASE_DELAY
         for attempt in range(_MAX_RETRIES):
+            self._cancel_point()
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
                     return json.loads(resp.read().decode())
             except urllib.error.HTTPError as exc:
                 if exc.code == 429 and attempt < _MAX_RETRIES - 1:
-                    time.sleep(delay)
+                    self._sleep(delay)
                     delay *= 2
                     continue
                 err_body = ""
