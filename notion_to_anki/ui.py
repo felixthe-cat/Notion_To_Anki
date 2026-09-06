@@ -13,6 +13,23 @@ _autosync_timer = None
 # (the click handler and the two QueryOp callbacks), so no lock is needed.
 _sync_running = False
 
+# The in-flight sync's cancel flag, so Anki closing can stop it. threading.Event
+# is itself thread-safe; only the reference is swapped, and only on the main thread.
+_active_cancel_event = None
+
+
+def cancel_active_sync(*args, **kwargs) -> None:
+    """Stop any running sync. Wired to Anki's profile-close hook.
+
+    A big Notion tree takes minutes, so quitting Anki mid-sync is normal. The
+    background thread would otherwise keep calling into a collection that is
+    being torn down underneath it. Cancellation is checked before every HTTP
+    request, so this lands almost immediately.
+    """
+    ev = _active_cancel_event
+    if ev is not None:
+        ev.set()
+
 
 def _is_alive(widget) -> bool:
     """True if the widget's underlying C++ object still exists.
@@ -623,7 +640,7 @@ def open_config_dialog() -> None:
 
     token_edit = QLineEdit(config.get("notion_token", ""))
     token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    token_edit.setPlaceholderText("secret_…")
+    token_edit.setPlaceholderText("ntn_…")
     token_row.addWidget(token_edit)
 
     show_btn = QPushButton("Show")
@@ -958,6 +975,8 @@ def on_sync_now_clicked(parent=None, on_complete=None, quiet: bool = False) -> N
     _sync_running = True
 
     cancel_event = threading.Event()
+    global _active_cancel_event
+    _active_cancel_event = cancel_event
 
     # ---- Progress dialog with Stop button ----
     # Parented to mw, never to the config dialog: this dialog outlives the click
@@ -1039,8 +1058,9 @@ def on_sync_now_clicked(parent=None, on_complete=None, quiet: bool = False) -> N
         return parent if _is_alive(parent) else mw
 
     def _done() -> None:
-        global _sync_running
+        global _sync_running, _active_cancel_event
         _sync_running = False
+        _active_cancel_event = None
         _close_dialog()
         if on_complete:
             try:
@@ -1065,6 +1085,21 @@ def on_sync_now_clicked(parent=None, on_complete=None, quiet: bool = False) -> N
         )
         if stopped:
             msg += "\n\nRun the sync again to pick up where it left off."
+        ignored = getattr(result, "ignored_images", 0)
+        lost_pages = getattr(result, "pages_with_lost_images", 0)
+        if ignored:
+            msg += (
+                f"\n\n{ignored} image(s) on {lost_pages} page(s) were not imported."
+                "\nOnly toggles, cloze text and tables become cards — an image"
+                "\nsitting loose on a page has no card to attach to."
+                "\nPut it inside a toggle in Notion to bring it across."
+            )
+        warnings = getattr(result, "warnings", [])
+        if warnings:
+            # Skipped-but-not-failed items get their own heading; lumping
+            # them in with errors made a clean sync report "8 error(s)".
+            msg += f"\n\n{len(warnings)} item(s) skipped (not failures):\n"
+            msg += "\n".join(warnings[:5])
         if result.errors:
             msg += f"\n\n{len(result.errors)} error(s):\n" + "\n".join(result.errors[:5])
         showInfo(msg, parent=_result_parent(), title="NotionSync for Anki")

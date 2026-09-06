@@ -72,8 +72,12 @@ class TestFetchBlockTreeStopsAtSubPages:
 
 @pytest.fixture
 def map_file(tmp_path, monkeypatch):
+    """Redirect both persisted maps into tmp — otherwise run_sync writes the
+    media cache into the real add-on's user_files/ during the test run."""
     path = tmp_path / "notion_block_id_map.json"
     monkeypatch.setattr(writer, "_map_path", lambda: str(path))
+    monkeypatch.setattr(writer, "_media_map_path",
+                        lambda: str(tmp_path / "notion_media_map.json"))
     return path
 
 
@@ -336,6 +340,457 @@ class TestMediaUrlSubstitution:
         )
         assert len(errors) == 1
         assert "HTTP 403" in errors[0]
+
+
+class TestContainerAndEmbedBlocks:
+    """Blocks that used to render as an empty string, losing their content."""
+
+    def test_column_children_are_not_lost(self):
+        from notion_to_anki.convert.richtext import block_to_html
+        block = {
+            "type": "column_list", "column_list": {},
+            "children": [{
+                "type": "column", "column": {},
+                "children": [{"type": "paragraph", "has_children": False,
+                              "paragraph": {"rich_text": [
+                                  {"type": "text", "plain_text": "inside a column",
+                                   "text": {"content": "inside a column"},
+                                   "annotations": {}}]}}],
+            }],
+        }
+        assert "inside a column" in block_to_html(block)
+
+    def test_synced_block_children_are_not_lost(self):
+        from notion_to_anki.convert.richtext import block_to_html
+        block = {
+            "type": "synced_block", "synced_block": {},
+            "children": [{"type": "paragraph", "has_children": False,
+                          "paragraph": {"rich_text": [
+                              {"type": "text", "plain_text": "synced text",
+                               "text": {"content": "synced text"},
+                               "annotations": {}}]}}],
+        }
+        assert "synced text" in block_to_html(block)
+
+    @pytest.mark.parametrize("btype,data", [
+        ("embed", {"url": "https://example.com/thing"}),
+        ("bookmark", {"url": "https://example.com/thing"}),
+        ("video", {"external": {"url": "https://example.com/thing"}}),
+        ("pdf", {"file": {"url": "https://example.com/thing"}}),
+    ])
+    def test_unrenderable_media_becomes_a_link(self, btype, data):
+        from notion_to_anki.convert.richtext import block_to_html
+        html = block_to_html({"type": btype, btype: data})
+        assert 'href="https://example.com/thing"' in html
+
+    def test_embed_without_url_renders_nothing(self):
+        from notion_to_anki.convert.richtext import block_to_html
+        assert block_to_html({"type": "embed", "embed": {}}) == ""
+
+
+class TestBlankTogglesAreReported:
+    def test_blank_titled_toggle_counted_as_skipped(self, map_file, monkeypatch):
+        page = "a" * 32
+        blocks = [
+            {"id": "t1", "type": "toggle", "has_children": False,
+             "toggle": {"rich_text": []}},                      # blank -> skipped
+            {"id": "t2", "type": "toggle", "has_children": False,
+             "toggle": {"rich_text": [{"plain_text": "Q", "annotations": {},
+                                       "type": "text", "text": {"content": "Q"}}]}},
+        ]
+
+        class Client:
+            def __init__(self, token, check_cancel=None): pass
+            def get_page(self, pid):
+                return {"object": "page", "properties": {
+                    "N": {"type": "title", "title": [{"plain_text": "P"}]}}}
+            def get_database(self, d): raise AssertionError
+            def get_block_children(self, bid): return blocks
+
+        monkeypatch.setattr("notion_to_anki.notion.client.NotionClient", Client)
+        r = sync_mod.run_sync(page_ids=[page], col=FakeCol(),
+                              config={"notion_token": "t", "page_ids": [page]})
+        assert r.skipped == 1
+        assert any("empty title" in w for w in r.warnings)
+        assert not r.errors, "a skipped blank toggle is not a failure"
+        assert r.added == 1
+
+
+class TestLazyDeckCreation:
+    """701 Notion pages holding 123 cards must not create 701 Anki decks."""
+
+    class RecordingCol(FakeCol):
+        def __init__(self):
+            super().__init__()
+            self.decks_made = []
+            outer = self
+
+            class D:
+                def id(self, name):
+                    outer.decks_made.append(name)
+                    return len(outer.decks_made)
+            self.decks = D()
+
+    def _run(self, monkeypatch, page_blocks):
+        page = "a" * 32
+
+        class Client:
+            def __init__(self, token, check_cancel=None): pass
+            def get_page(self, pid):
+                return {"object": "page", "properties": {
+                    "N": {"type": "title", "title": [{"plain_text": "P"}]}}}
+            def get_database(self, d): raise AssertionError
+            def get_block_children(self, bid): return page_blocks
+
+        monkeypatch.setattr("notion_to_anki.notion.client.NotionClient", Client)
+        col = self.RecordingCol()
+        sync_mod.run_sync(page_ids=[page], col=col,
+                          config={"notion_token": "t", "page_ids": [page]})
+        return col
+
+    def test_page_with_no_cards_creates_no_deck(self, map_file, monkeypatch):
+        col = self._run(monkeypatch, [
+            {"id": "p1", "type": "paragraph", "has_children": False,
+             "paragraph": {"rich_text": []}}])
+        assert col.decks_made == []
+
+    def test_page_with_cards_still_creates_its_deck(self, map_file, monkeypatch):
+        col = self._run(monkeypatch, [
+            {"id": "t1", "type": "toggle", "has_children": False,
+             "toggle": {"rich_text": [{"plain_text": "Q", "annotations": {},
+                                       "type": "text", "text": {"content": "Q"}}]}}])
+        assert col.decks_made == ["P"]
+
+    def test_deck_created_once_not_per_card(self, map_file, monkeypatch):
+        col = self._run(monkeypatch, [
+            {"id": f"t{i}", "type": "toggle", "has_children": False,
+             "toggle": {"rich_text": [{"plain_text": f"Q{i}", "annotations": {},
+                                       "type": "text", "text": {"content": f"Q{i}"}}]}}
+            for i in range(5)])
+        assert col.decks_made == ["P"]
+
+
+class TestStrandedImagesAreCounted:
+    """41% of the eMRCS images sit on pages with no toggles, so no card can hold
+    them. That is by design, but it must not be silent."""
+
+    def _img(self, i):
+        return {"id": f"i{i}", "type": "image", "has_children": False,
+                "image": {"file": {"url": f"https://x/{i}.png"}}}
+
+    def _toggle(self, i, children):
+        return {"id": f"t{i}", "type": "toggle", "has_children": bool(children),
+                "toggle": {"rich_text": [{"plain_text": "Q", "annotations": {},
+                                          "type": "text", "text": {"content": "Q"}}]},
+                "children": children}
+
+    def _run(self, monkeypatch, blocks):
+        page = "a" * 32
+
+        # Serve children per block id, the way the real API does. Returning the
+        # whole page for every id makes fetch_block_tree recurse forever.
+        tree = {page: blocks}
+
+        def register(bs):
+            for b in bs:
+                kids = b.pop("children", [])
+                if kids:
+                    tree[b["id"]] = kids
+                    register(kids)
+        register(blocks)
+
+        class Client:
+            def __init__(self, token, check_cancel=None): pass
+            def get_page(self, pid):
+                return {"object": "page", "properties": {
+                    "N": {"type": "title", "title": [{"plain_text": "P"}]}}}
+            def get_database(self, d): raise AssertionError
+            def get_block_children(self, bid):
+                return json.loads(json.dumps(tree.get(bid, [])))
+
+        monkeypatch.setattr("notion_to_anki.notion.client.NotionClient", Client)
+        monkeypatch.setattr(sync_mod, "_process_media", lambda c, *a, **k: c)
+        return sync_mod.run_sync(page_ids=[page], col=FakeCol(),
+                                 config={"notion_token": "t", "page_ids": [page]})
+
+    def test_loose_images_on_a_page_with_no_cards(self, map_file, monkeypatch):
+        r = self._run(monkeypatch, [self._img(1), self._img(2)])
+        assert r.ignored_images == 2
+        assert r.pages_with_lost_images == 1
+        assert r.added == 0
+
+    def test_images_inside_a_toggle_are_not_counted_as_ignored(self, map_file, monkeypatch):
+        r = self._run(monkeypatch, [self._toggle(1, [self._img(1), self._img(2)])])
+        assert r.ignored_images == 0
+        assert r.added == 1
+
+    def test_mixed_page_counts_only_the_loose_one(self, map_file, monkeypatch):
+        r = self._run(monkeypatch, [self._toggle(1, [self._img(1)]), self._img(9)])
+        assert r.ignored_images == 1
+        # the page made a card but still stranded an image, so it counts
+        assert r.pages_with_lost_images == 1
+
+    def test_navigation_page_losing_nothing_is_not_counted(self, map_file, monkeypatch):
+        """Most of a Notion tree is card-less navigation that loses nothing.
+        Counting those made the warning read '83 images on 578 pages'."""
+        r = self._run(monkeypatch, [
+            {"id": "p1", "type": "paragraph", "has_children": False,
+             "paragraph": {"rich_text": []}}])
+        assert r.ignored_images == 0
+        assert r.pages_with_lost_images == 0
+
+    def test_nested_images_inside_a_toggle_still_reachable(self, map_file, monkeypatch):
+        nested = {"id": "b1", "type": "bulleted_list_item", "has_children": True,
+                  "bulleted_list_item": {"rich_text": []},
+                  "children": [self._img(1)]}
+        r = self._run(monkeypatch, [self._toggle(1, [nested])])
+        assert r.ignored_images == 0
+
+
+class TestMediaCache:
+    """Media filenames are content hashes, so the name is unknowable without
+    downloading. Cache by image block id or every sync re-fetches every image."""
+
+    def _block(self, url="https://x/a.png?sig=1"):
+        return {
+            "id": "tog1", "type": "toggle", "has_children": True,
+            "toggle": {"rich_text": []},
+            "children": [{"id": "img1", "type": "image", "has_children": False,
+                          "image": {"file": {"url": url}}}],
+        }
+
+    class Col:
+        def __init__(self, tmpdir):
+            self._dir = str(tmpdir)
+            class M:
+                def dir(inner):
+                    return self._dir
+            self.media = M()
+
+    def _call(self, col, media_map, downloads, url="https://x/a.png?sig=1"):
+        from notion_to_anki.convert.toggles import toggle_to_card
+        block = self._block(url)
+        card = toggle_to_card(block)
+
+        def ingest(c, u):
+            downloads.append(u)
+            return "notion_abc123.png"
+
+        return sync_mod._process_media(
+            card, block, col,
+            ingest_image=ingest,
+            image_block_url=lambda b: b["image"]["file"]["url"],
+            ingest_audio=lambda c, u: "x.mp3",
+            audio_block_url=lambda b: None,
+            media_map=media_map,
+        )
+
+    def test_first_sync_downloads_and_records(self, tmp_path):
+        col = self.Col(tmp_path)
+        mm, dl = {}, []
+        card = self._call(col, mm, dl)
+        assert dl == ["https://x/a.png?sig=1"]
+        assert mm == {"img1": "notion_abc123.png"}
+        assert 'src="notion_abc123.png"' in card.back
+
+    def test_second_sync_skips_the_download(self, tmp_path):
+        col = self.Col(tmp_path)
+        (tmp_path / "notion_abc123.png").write_bytes(b"x")
+        mm, dl = {"img1": "notion_abc123.png"}, []
+        # a fresh signed URL, as Notion issues on every fetch
+        card = self._call(col, mm, dl, url="https://x/a.png?sig=DIFFERENT")
+        assert dl == [], "cached image must not be re-downloaded"
+        assert 'src="notion_abc123.png"' in card.back
+
+    def test_cache_miss_when_file_was_deleted_from_media(self, tmp_path):
+        col = self.Col(tmp_path)  # file absent on disk
+        mm, dl = {"img1": "notion_abc123.png"}, []
+        self._call(col, mm, dl)
+        assert dl, "must re-download if the media file is gone"
+
+    def test_media_map_survives_round_trip(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(writer, "_media_map_path",
+                            lambda: str(tmp_path / "media.json"))
+        writer.save_media_map({"img1": "notion_abc.png"})
+        assert writer.load_media_map() == {"img1": "notion_abc.png"}
+
+    def test_corrupt_media_map_is_not_fatal(self, tmp_path, monkeypatch):
+        p = tmp_path / "media.json"
+        p.write_text("{not json", encoding="utf-8")
+        monkeypatch.setattr(writer, "_media_map_path", lambda: str(p))
+        assert writer.load_media_map() == {}
+
+
+class TestFriendlyNotionErrors:
+    """A new user's first failure is almost always a mistyped token or a page
+    they forgot to share. Showing Notion's raw JSON told them nothing."""
+
+    def _err(self, status, code, message="raw detail"):
+        import json as _json
+        from notion_to_anki.notion.client import _friendly_error
+        return _friendly_error(status, _json.dumps(
+            {"object": "error", "status": status, "code": code, "message": message}))
+
+    def test_bad_token_explains_where_to_get_one(self):
+        e = self._err(401, "unauthorized", "API token is invalid.")
+        assert "notion.so/profile/integrations" in str(e)
+        assert "{" not in str(e), "must not leak raw JSON"
+        assert e.status == 401 and e.code == "unauthorized"
+
+    def test_unshared_page_explains_connections(self):
+        e = self._err(404, "object_not_found")
+        assert "Connections" in str(e)
+        assert "{" not in str(e)
+
+    def test_unknown_code_falls_back_to_notion_message(self):
+        e = self._err(400, "some_new_code", "Something specific happened.")
+        assert str(e) == "Something specific happened."
+
+    def test_unparseable_body_still_gives_a_sentence(self):
+        from notion_to_anki.notion.client import _friendly_error
+        e = _friendly_error(500, "<html>gateway error</html>")
+        assert "HTTP 500" in str(e)
+
+    def test_messages_are_ascii_only(self):
+        """These can be written to logs on systems whose encoding is not UTF-8."""
+        from notion_to_anki.notion.client import _FRIENDLY
+        for v in _FRIENDLY.values():
+            assert all(ord(c) < 128 for c in v), v
+
+
+class TestResolveReportsThePageError:
+    """Users paste pages far more often than databases; reporting the database
+    attempt told them their page was a 'missing database'."""
+
+    def test_page_error_wins_over_database_error(self):
+        from notion_to_anki.notion.client import NotionError
+
+        class C:
+            def get_page(self, i):
+                raise NotionError("page problem", 404, "object_not_found")
+            def get_database(self, i):
+                raise NotionError("database problem", 404, "object_not_found")
+
+        with pytest.raises(NotionError) as ei:
+            sync_mod._resolve_type_and_title(C(), "x", lambda o: "", lambda o: "")
+        assert "page problem" in str(ei.value)
+
+    def test_real_database_still_resolves(self):
+        from notion_to_anki.notion.client import NotionError
+
+        class C:
+            def get_page(self, i):
+                raise NotionError("not a page", 404, "object_not_found")
+            def get_database(self, i):
+                return {"object": "database"}
+
+        kind, title = sync_mod._resolve_type_and_title(
+            C(), "x", lambda o: "P", lambda o: "DB")
+        assert (kind, title) == ("database", "DB")
+
+
+class TestCancelOnAnkiClose:
+    """A big Notion tree takes minutes, so quitting Anki mid-sync is normal.
+    The background thread must be told to stop before the collection closes."""
+
+    def test_sets_the_active_cancel_event(self):
+        import threading as _t
+        from notion_to_anki import ui
+        ev = _t.Event()
+        ui._active_cancel_event = ev
+        try:
+            ui.cancel_active_sync()
+            assert ev.is_set()
+        finally:
+            ui._active_cancel_event = None
+
+    def test_no_sync_running_is_a_no_op(self):
+        from notion_to_anki import ui
+        ui._active_cancel_event = None
+        ui.cancel_active_sync()          # must not raise
+
+    def test_accepts_hook_arguments(self):
+        """gui_hooks may pass arguments; the callback must tolerate them."""
+        import threading as _t
+        from notion_to_anki import ui
+        ev = _t.Event()
+        ui._active_cancel_event = ev
+        try:
+            ui.cancel_active_sync("something", key="value")
+            assert ev.is_set()
+        finally:
+            ui._active_cancel_event = None
+
+
+class TestRateLimitHandling:
+    """A real eMRCS sync lost 3 requests to Notion's rate limiter: the client
+    gave up after ~3s of backoff, silently dropping those pages' content."""
+
+    def _http_error(self, code, retry_after=None):
+        import urllib.error, io as _io, email.message
+        hdrs = email.message.Message()
+        if retry_after is not None:
+            hdrs["Retry-After"] = str(retry_after)
+        return urllib.error.HTTPError(
+            "http://x", code, "err", hdrs, _io.BytesIO(b'{"code":"rate_limited"}'))
+
+    def test_honours_retry_after_header(self):
+        from notion_to_anki.notion.client import _retry_after
+        assert _retry_after(self._http_error(429, 7), fallback=1.0) == 7.0
+
+    def test_retry_after_is_capped(self):
+        from notion_to_anki.notion.client import _retry_after, _MAX_RETRY_DELAY
+        assert _retry_after(self._http_error(429, 9999), 1.0) == _MAX_RETRY_DELAY
+
+    def test_falls_back_when_header_missing_or_junk(self):
+        from notion_to_anki.notion.client import _retry_after
+        assert _retry_after(self._http_error(429), 2.5) == 2.5
+        assert _retry_after(self._http_error(429, "soon"), 2.5) == 2.5
+
+    def test_waits_out_rate_limits_then_succeeds(self, monkeypatch):
+        """Six 429s in a row must still end in a successful request."""
+        from notion_to_anki.notion import client as c
+        calls = {"n": 0}
+
+        def fake_urlopen(req, timeout=None):
+            calls["n"] += 1
+            if calls["n"] <= 4:
+                raise self._http_error(429, 0)
+            class R:
+                def __enter__(s): return s
+                def __exit__(s, *a): return False
+                def read(s): return b'{"ok": true}'
+            return R()
+
+        monkeypatch.setattr(c.urllib.request, "urlopen", fake_urlopen)
+        cl = c.NotionClient("tok")
+        assert cl._send(object()) == {"ok": True}
+        assert calls["n"] == 5
+
+    def test_gives_up_after_the_budget_with_a_clear_message(self, monkeypatch):
+        from notion_to_anki.notion import client as c
+
+        def always_429(req, timeout=None):
+            raise self._http_error(429, 0)
+
+        monkeypatch.setattr(c.urllib.request, "urlopen", always_429)
+        with pytest.raises(c.NotionError) as ei:
+            c.NotionClient("tok")._send(object())
+        assert ei.value.status == 429
+        assert "rate limit" in str(ei.value).lower()
+
+    def test_non_429_errors_are_not_retried(self, monkeypatch):
+        from notion_to_anki.notion import client as c
+        calls = {"n": 0}
+
+        def unauthorized(req, timeout=None):
+            calls["n"] += 1
+            raise self._http_error(401)
+
+        monkeypatch.setattr(c.urllib.request, "urlopen", unauthorized)
+        with pytest.raises(c.NotionError):
+            c.NotionClient("tok")._send(object())
+        assert calls["n"] == 1, "a bad token must fail immediately, not retry"
 
 
 class TestIndexExistingNotes:

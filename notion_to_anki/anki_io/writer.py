@@ -14,16 +14,51 @@ import threading
 import time
 
 _MAP_FILENAME = "notion_block_id_map.json"
+_MEDIA_MAP_FILENAME = "notion_media_map.json"
 _REPLACE_RETRIES = 10
 
 
-def _map_path() -> str:
-    """Resolve the path to the persistent id-map file in user_files/."""
+def _user_files_path(filename: str) -> str:
+    """Resolve a path inside user_files/, the only dir Anki keeps across updates."""
     # user_files/ lives alongside the notion_to_anki package directory
     pkg_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     user_files = os.path.join(pkg_dir, "user_files")
     os.makedirs(user_files, exist_ok=True)
-    return os.path.join(user_files, _MAP_FILENAME)
+    return os.path.join(user_files, filename)
+
+
+def _map_path() -> str:
+    """Resolve the path to the persistent id-map file in user_files/."""
+    return _user_files_path(_MAP_FILENAME)
+
+
+def _media_map_path() -> str:
+    """Resolve the path to the image-block → media-filename cache."""
+    return _user_files_path(_MEDIA_MAP_FILENAME)
+
+
+def load_media_map() -> dict[str, str]:
+    """Load the image-block-id → media-filename cache.
+
+    Media filenames are content hashes, so the only way to learn a file's name
+    is to download it. Without this cache every sync re-downloaded every image
+    (27 MB and most of a 17-minute run on the eMRCS page), and auto-sync would
+    do it on every tick. Image block ids are stable, so they make a usable key.
+    """
+    path = _media_map_path()
+    if not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_media_map(mapping: dict[str, str]) -> None:
+    """Persist the image-block-id → media-filename cache atomically."""
+    _atomic_write_json(_media_map_path(), mapping)
 
 
 def load_id_map() -> dict[str, str]:
@@ -45,14 +80,18 @@ def load_id_map() -> dict[str, str]:
 
 
 def save_id_map(mapping: dict[str, str]) -> None:
-    """Persist the notion_block_id → note id map to user_files/.
+    """Persist the notion_block_id → note id map to user_files/."""
+    _atomic_write_json(_map_path(), mapping)
+
+
+def _atomic_write_json(path: str, mapping: dict) -> None:
+    """Write JSON to path atomically.
 
     Written to a temp file then renamed: os.replace is atomic, so a crash or a
     concurrent reader can never observe a half-written file. The temp name is
     per-writer — on Windows a shared one makes os.replace fail with a sharing
     violation if a second writer still has it open.
     """
-    path = _map_path()
     tmp = f"{path}.{os.getpid()}-{threading.get_ident()}.tmp"
     try:
         with open(tmp, "w", encoding="utf-8") as fh:

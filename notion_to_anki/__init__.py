@@ -33,8 +33,14 @@ try:
             config = {}
         _restart_autosync_timer(config)
 
+    def _on_profile_will_close() -> None:
+        # Stop an in-flight sync before the collection is torn down under it.
+        from .ui import cancel_active_sync
+        cancel_active_sync()
+
     gui_hooks.main_window_did_init.append(_setup_menu)
     gui_hooks.profile_did_open.append(_on_profile_loaded)
+    gui_hooks.profile_will_close.append(_on_profile_will_close)
 
 except ImportError:
     # Outside Anki (tests) — nothing to register.
