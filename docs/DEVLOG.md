@@ -1,5 +1,27 @@
 # Devlog
 
+### 2026-09-06 17:38 — Image repair complete: 118 broken -> 17, all remaining out of reach
+**Goal:** finish repairing the broken images.
+**Changed:** No source files. Operations on the user's collection.
+**Worked:** Round 2 asked Notion for each broken card's parent page and synced
+those 27 pages directly: 6.8 min, added=17 updated=61 errors=0. Broken image
+references went 79 -> 17. Across the whole repair: **118 -> 17**, media files
+374 with **none missing or empty**, 480 notes / 477 unique block ids (the same
+3 pre-existing `Testing::*` duplicates, nothing new). Final state by deck:
+CEG 11 local / 0 broken, med testing 365 local / 1 broken, Testing 0 / 16.
+Confirmed the three cards the user actually reported now hold local media
+(`notion_3308f80f….png`, `notion_52b87cc8….png`); "Caval opening at T8" has no
+images because it is empty in Notion.
+The 17 leftovers are unreachable, not unfixed: the parent lookup for those block
+ids returns object_not_found, i.e. the integration has no access to that source
+page at all. They are the `Testing::*` scratch deck plus one stray.
+**Dead ends:** none this round.
+**Open:** Two things the add-on still cannot tell a user: that a card's source
+page has drifted outside the configured root (it silently stops updating), and
+that a card's source is no longer visible to the integration. Both currently
+present as "my pictures broke". Worth a warning that names the affected cards.
+The AnkiWeb upload of 1.3.0 is still manual.
+
 ### 2026-09-06 17:31 — Image repair round 1, and the orphaned-source discovery
 **Goal:** repair the broken images in the live collection.
 **Changed:** No source files. Operations on the user's collection.
