@@ -9,14 +9,54 @@ import os as _os
 _ADDON_NAME = _os.path.basename(_os.path.dirname(_os.path.abspath(__file__)))
 _autosync_timer = None
 
+# True while a sync is in flight. Only ever read/written on the main thread
+# (the click handler and the two QueryOp callbacks), so no lock is needed.
+_sync_running = False
+
+# The in-flight sync's cancel flag, so Anki closing can stop it. threading.Event
+# is itself thread-safe; only the reference is swapped, and only on the main thread.
+_active_cancel_event = None
+
+
+def cancel_active_sync(*args, **kwargs) -> None:
+    """Stop any running sync. Wired to Anki's profile-close hook.
+
+    A big Notion tree takes minutes, so quitting Anki mid-sync is normal. The
+    background thread would otherwise keep calling into a collection that is
+    being torn down underneath it. Cancellation is checked before every HTTP
+    request, so this lands almost immediately.
+    """
+    ev = _active_cancel_event
+    if ev is not None:
+        ev.set()
+
+
+def _is_alive(widget) -> bool:
+    """True if the widget's underlying C++ object still exists.
+
+    Qt destroys child widgets with their parent, but the Python wrapper lives on.
+    Touching such a wrapper raises RuntimeError — and because our progress updates
+    run inside a Qt slot, PyQt6 turns that into qFatal() and aborts Anki outright
+    with no traceback. Every cross-thread UI update must be gated on this.
+    """
+    if widget is None:
+        return False
+    try:
+        widget.objectName()
+        return True
+    except RuntimeError:
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Sync status persistence (written to user_files/last_sync_status.json)
 # ---------------------------------------------------------------------------
 
 def _status_file_path() -> str:
-    pkg_dir = _os.path.dirname(_os.path.abspath(__file__))
-    user_files = _os.path.join(_os.path.dirname(pkg_dir), "user_files")
+    # user_files/ lives *inside* the add-on folder — that is the only directory
+    # Anki preserves across add-on updates. Resolving it one level higher put it
+    # next to the add-on in addons21/, where Anki treats it as a broken add-on.
+    user_files = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "user_files")
     _os.makedirs(user_files, exist_ok=True)
     return _os.path.join(user_files, "last_sync_status.json")
 
@@ -600,7 +640,7 @@ def open_config_dialog() -> None:
 
     token_edit = QLineEdit(config.get("notion_token", ""))
     token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-    token_edit.setPlaceholderText("secret_…")
+    token_edit.setPlaceholderText("ntn_…")
     token_row.addWidget(token_edit)
 
     show_btn = QPushButton("Show")
@@ -907,8 +947,12 @@ def _extract_page_id(value: str) -> str:
 # Sync-now handler
 # ---------------------------------------------------------------------------
 
-def on_sync_now_clicked(parent=None, on_complete=None) -> None:
-    """Run a sync in the background with a cancellable progress dialog."""
+def on_sync_now_clicked(parent=None, on_complete=None, quiet: bool = False) -> None:
+    """Run a sync in the background with a cancellable progress dialog.
+
+    quiet: suppress the "already running" warning (used by the auto-sync timer).
+    """
+    global _sync_running
     try:
         from aqt import mw  # type: ignore
         from aqt.utils import showInfo, showCritical  # type: ignore
@@ -922,10 +966,23 @@ def on_sync_now_clicked(parent=None, on_complete=None) -> None:
 
     from .sync import run_sync, SyncCancelledError
 
-    cancel_event = threading.Event()
+    # Two syncs at once would race on the collection and on the id-map file.
+    if _sync_running:
+        if not quiet:
+            showInfo("A sync is already running.", parent=mw,
+                     title="NotionSync for Anki")
+        return
+    _sync_running = True
 
-    # ---- Custom progress dialog with Stop button ----
-    prog_dlg = QDialog(parent or mw)
+    cancel_event = threading.Event()
+    global _active_cancel_event
+    _active_cancel_event = cancel_event
+
+    # ---- Progress dialog with Stop button ----
+    # Parented to mw, never to the config dialog: this dialog outlives the click
+    # that spawned it, and if its parent were destroyed mid-sync the background
+    # thread's progress updates would abort Anki (see _is_alive).
+    prog_dlg = QDialog(mw)
     prog_dlg.setWindowTitle("NotionSync for Anki")
     prog_dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
     prog_dlg.setMinimumWidth(440)
@@ -942,23 +999,40 @@ def on_sync_now_clicked(parent=None, on_complete=None) -> None:
     prog_lbl.setStyleSheet("font-size:12px;")
     _layout.addWidget(prog_lbl)
 
-    stop_btn = QPushButton("⏹  Stop Sync")
+    hint_lbl = QLabel("Cards already imported are kept if you stop.")
+    hint_lbl.setStyleSheet("font-size:10px;color:#7F8C8D;")
+    _layout.addWidget(hint_lbl)
+
+    stop_btn = QPushButton("⏹  Stop Import")
     stop_btn.setStyleSheet(_BTN_RED)
+    stop_btn.setToolTip("Stop the import — cards already created are kept")
 
     def _on_stop_clicked() -> None:
+        if cancel_event.is_set():
+            return
         cancel_event.set()
-        stop_btn.setEnabled(False)
-        stop_btn.setText("Stopping…")
-        prog_lbl.setText("Stopping — finishing the current card, then saving…")
+        if _is_alive(stop_btn):
+            stop_btn.setEnabled(False)
+            stop_btn.setText("Stopping…")
+        if _is_alive(prog_lbl):
+            prog_lbl.setText("Stopping — finishing the current step, then saving…")
 
     stop_btn.clicked.connect(_on_stop_clicked)
+    # Esc closes a QDialog by default, which would hide this window and leave the
+    # sync running invisibly with no way to stop it. Treat it as Stop instead.
+    prog_dlg.rejected.connect(_on_stop_clicked)
     _layout.addWidget(stop_btn)
     prog_dlg.show()
 
     # ---- Background sync ----
     def _progress_cb(msg: str) -> None:
+        def _apply() -> None:
+            # Runs on the main thread, possibly after the dialog is gone.
+            if _is_alive(prog_lbl):
+                prog_lbl.setText(msg)
+
         try:
-            mw.taskman.run_on_main(lambda: prog_lbl.setText(msg))
+            mw.taskman.run_on_main(_apply)
         except Exception:
             pass
 
@@ -967,29 +1041,68 @@ def on_sync_now_clicked(parent=None, on_complete=None) -> None:
         return run_sync(col=mw.col, config=cfg, progress_cb=_progress_cb,
                         cancel_event=cancel_event)
 
-    def _finish(result, *, stopped: bool = False) -> None:
+    def _close_dialog() -> None:
+        if not _is_alive(prog_dlg):
+            return
+        # close() makes a QDialog emit rejected, which is wired to Stop. Detach
+        # it first so finishing normally doesn't flash "Stopping…" on the way out.
+        try:
+            prog_dlg.rejected.disconnect(_on_stop_clicked)
+        except (TypeError, RuntimeError):
+            pass
         prog_dlg.close()
+        prog_dlg.deleteLater()
+
+    def _result_parent():
+        """The config dialog may have been closed while the sync ran."""
+        return parent if _is_alive(parent) else mw
+
+    def _done() -> None:
+        global _sync_running, _active_cancel_event
+        _sync_running = False
+        _active_cancel_event = None
+        _close_dialog()
+        if on_complete:
+            try:
+                on_complete()
+            except Exception:
+                pass
+
+    def _finish(result, *, stopped: bool = False) -> None:
         _save_sync_status(
             success=True,
             added=result.added, updated=result.updated,
             skipped=result.skipped, errors=result.errors,
             per_page_results=result.per_page_results,
         )
-        if on_complete:
-            try:
-                on_complete()
-            except Exception:
-                pass
+        _done()
         total = result.added + result.updated
-        prefix = "Sync stopped." if stopped else "Sync complete!"
+        prefix = "Import stopped." if stopped else "Sync complete!"
         msg = (
             f"{prefix}\n\n"
             f"{total} card{'s' if total != 1 else ''} synced"
             f"  ·  {result.added} new  ·  {result.updated} updated"
         )
+        if stopped:
+            msg += "\n\nRun the sync again to pick up where it left off."
+        ignored = getattr(result, "ignored_images", 0)
+        lost_pages = getattr(result, "pages_with_lost_images", 0)
+        if ignored:
+            msg += (
+                f"\n\n{ignored} image(s) on {lost_pages} page(s) were not imported."
+                "\nOnly toggles, cloze text and tables become cards — an image"
+                "\nsitting loose on a page has no card to attach to."
+                "\nPut it inside a toggle in Notion to bring it across."
+            )
+        warnings = getattr(result, "warnings", [])
+        if warnings:
+            # Skipped-but-not-failed items get their own heading; lumping
+            # them in with errors made a clean sync report "8 error(s)".
+            msg += f"\n\n{len(warnings)} item(s) skipped (not failures):\n"
+            msg += "\n".join(warnings[:5])
         if result.errors:
             msg += f"\n\n{len(result.errors)} error(s):\n" + "\n".join(result.errors[:5])
-        showInfo(msg, parent=parent, title="NotionSync for Anki")
+        showInfo(msg, parent=_result_parent(), title="NotionSync for Anki")
 
     def _on_success(result) -> None:
         _finish(result, stopped=False)
@@ -998,14 +1111,10 @@ def on_sync_now_clicked(parent=None, on_complete=None) -> None:
         if isinstance(exc, SyncCancelledError):
             _finish(exc.partial_result, stopped=True)
         else:
-            prog_dlg.close()
             _save_sync_status(success=False, error_msg=str(exc))
-            if on_complete:
-                try:
-                    on_complete()
-                except Exception:
-                    pass
-            showCritical(str(exc), parent=parent, title="NotionSync for Anki — Error")
+            _done()
+            showCritical(str(exc), parent=_result_parent(),
+                         title="NotionSync for Anki — Error")
 
     (
         QueryOp(parent=mw, op=_background, success=_on_success)
@@ -1036,5 +1145,14 @@ def _restart_autosync_timer(config: dict) -> None:
 
     interval_ms = int(config.get("auto_sync_interval_minutes", 15)) * 60 * 1000
     _autosync_timer = QTimer(mw)
-    _autosync_timer.timeout.connect(lambda: on_sync_now_clicked())
+    _autosync_timer.timeout.connect(_autosync_tick)
     _autosync_timer.start(interval_ms)
+
+
+def _autosync_tick() -> None:
+    """Timer handler. Skips the tick if the previous sync is still running —
+    a sync slower than the interval would otherwise stack up threads and
+    modal dialogs without bound."""
+    if _sync_running:
+        return
+    on_sync_now_clicked(quiet=True)

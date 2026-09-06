@@ -177,6 +177,29 @@ def block_to_html(block: dict) -> str:
             rows_html.append(f"<tr>{cells_html}</tr>")
         return f'<table border="1" style="border-collapse:collapse">{"".join(rows_html)}</table>'
 
+    if btype in ("column_list", "column", "synced_block"):
+        # Layout containers carry no content of their own. Without this they
+        # render as nothing and everything inside them is silently lost.
+        return _render_children(block.get("children", []))
+
+    if btype in ("embed", "bookmark", "video", "pdf", "file", "link_preview"):
+        # Not embeddable in a card, but dropping them loses the reference
+        # entirely — emit a link so the content is still reachable.
+        # ponytail: Notion-hosted (file.url) links are signed and expire within
+        # the hour, so those are labelled rather than passed off as permanent.
+        # Ingesting them into collection media is the upgrade path if a real
+        # page ever needs it — none of the current source pages use them.
+        external = data.get("url") or data.get("external", {}).get("url", "")
+        hosted = data.get("file", {}).get("url", "")
+        url = external or hosted
+        if not url:
+            return ""
+        caption = rich_text_to_html(data.get("caption", []))
+        label = caption or _escape(url.split("?")[0])
+        if not external and hosted:
+            label += ' <i>(Notion link — expires)</i>'
+        return f'<p><a href="{_escape_attr(url)}">{label}</a></p>'
+
     if btype == "table_of_contents":
         return ""
 
