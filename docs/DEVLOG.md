@@ -1,5 +1,35 @@
 # Devlog
 
+### 2026-09-06 16:52 — 1.3.0: answer-less cards, and diagnosing the reported blanks
+**Goal:** user reviewed real cards and reported broken photos, cards blank on
+both sides, and cards with a question but no answer.
+**Changed:**
+- `notion_to_anki/sync.py` — added `_has_content()` (media counts as content,
+  empty tags do not). A toggle whose answer is empty is now skipped with a
+  warning naming the question, instead of producing an unstudiable card. The
+  blank-question guard, previously silent, now warns too.
+- `tests/test_sync_robustness.py` — shared `make_client()` stub serving children
+  per block id; +6 tests (99 total).
+- `manifest.json` — 1.3.0.
+**Worked:** Diagnosed each symptom against the live collection and Notion rather
+than guessing. Broken photos: 91 notes under `med testing::*` still hold expiring
+S3 URLs because that page is not in `page_ids` and was never re-synced with the
+escaping fix — re-running the exact toggles through the current code produces
+local files (`notion_52b87cc8….png`, 44 KB; `notion_3308f80f….png`, 34 KB).
+"Front but no back": either the answer is only an image (so it looks blank when
+the URL has expired) or, for "Caval opening at T8", the toggle has **zero
+children in Notion** - genuinely empty at source. Blank-on-both-sides: 4 notes
+whose Front and Back are both empty; current code already refuses to create
+these, so they are stale rows from an older build.
+**Dead ends:** Setting `has_children: True` in the fixtures made
+`fetch_block_tree` recurse forever, because the stubs returned the same block
+list for every id — the resulting RecursionError was swallowed by a broad
+`except` and surfaced as "id map must be written on cancellation". Fixed by the
+shared per-id stub.
+**Open:** The 91 broken images and 4 stale blank notes are existing rows; they
+need a re-sync of the eMRCS page (not currently in `page_ids`) to repair.
+AnkiWeb upload remains manual.
+
 ### 2026-09-06 15:54 — Release 1.2.0: commit, package, deploy
 **Goal:** "update the package so that other people using this add-on will be updated too".
 **Changed:**

@@ -193,9 +193,48 @@ class FakeCol:
         self.notes.append(note)
 
 
+def make_client(page_id, blocks, title="P"):
+    """Stub Notion client that serves children per block id.
+
+    Returning the same list for every id makes fetch_block_tree recurse forever
+    once a block declares has_children.
+    """
+    tree = {page_id: blocks}
+
+    def register(bs):
+        for b in bs:
+            kids = b.pop("children", [])
+            if kids:
+                tree[b["id"]] = kids
+                register(kids)
+    register(blocks)
+
+    class Client:
+        def __init__(self, token, check_cancel=None):
+            self.check_cancel = check_cancel
+        def get_page(self, pid):
+            return {"object": "page", "properties": {
+                "N": {"type": "title", "title": [{"plain_text": title}]}}}
+        def get_database(self, d):
+            raise AssertionError("should not be reached")
+        def get_block_children(self, bid):
+            if self.check_cancel:
+                self.check_cancel()
+            return json.loads(json.dumps(tree.get(bid, [])))
+    return Client
+
+
+def _answer(text="A"):
+    """A toggle needs a body, or the sync now skips it as answer-less."""
+    return {"id": "ans", "type": "paragraph", "has_children": False,
+            "paragraph": {"rich_text": [{"plain_text": text, "annotations": {},
+                                         "type": "text", "text": {"content": text}}]}}
+
+
 def _page_tree(n_cards):
     children = [
-        {"id": f"tog{i}", "type": "toggle", "has_children": False,
+        {"id": f"tog{i}", "type": "toggle", "has_children": True,
+         "children": [_answer()],
          "toggle": {"rich_text": [{"plain_text": f"Q{i}", "annotations": {},
                                    "type": "text", "text": {"content": f"Q{i}"}}]}}
         for i in range(n_cards)
@@ -210,18 +249,8 @@ class TestRunSyncCancellation:
         cancel = threading.Event()
         page = "a" * 32
 
-        class Client:
-            def __init__(self, token, check_cancel=None):
-                self.check_cancel = check_cancel
-            def get_page(self, pid):
-                return {"object": "page", "properties": {
-                    "N": {"type": "title", "title": [{"plain_text": "P"}]}}}
-            def get_database(self, d):
-                raise AssertionError("should not be reached")
-            def get_block_children(self, bid):
-                return _page_tree(5)
-
-        monkeypatch.setattr("notion_to_anki.notion.client.NotionClient", Client)
+        monkeypatch.setattr("notion_to_anki.notion.client.NotionClient",
+                            make_client(page, _page_tree(5)))
 
         col = FakeCol()
         # cancel after the 3rd progress report mentioning a card
@@ -394,20 +423,14 @@ class TestBlankTogglesAreReported:
         blocks = [
             {"id": "t1", "type": "toggle", "has_children": False,
              "toggle": {"rich_text": []}},                      # blank -> skipped
-            {"id": "t2", "type": "toggle", "has_children": False,
+            {"id": "t2", "type": "toggle", "has_children": True,
+             "children": [_answer()],
              "toggle": {"rich_text": [{"plain_text": "Q", "annotations": {},
                                        "type": "text", "text": {"content": "Q"}}]}},
         ]
 
-        class Client:
-            def __init__(self, token, check_cancel=None): pass
-            def get_page(self, pid):
-                return {"object": "page", "properties": {
-                    "N": {"type": "title", "title": [{"plain_text": "P"}]}}}
-            def get_database(self, d): raise AssertionError
-            def get_block_children(self, bid): return blocks
-
-        monkeypatch.setattr("notion_to_anki.notion.client.NotionClient", Client)
+        monkeypatch.setattr("notion_to_anki.notion.client.NotionClient",
+                            make_client(page, blocks))
         r = sync_mod.run_sync(page_ids=[page], col=FakeCol(),
                               config={"notion_token": "t", "page_ids": [page]})
         assert r.skipped == 1
@@ -434,15 +457,8 @@ class TestLazyDeckCreation:
     def _run(self, monkeypatch, page_blocks):
         page = "a" * 32
 
-        class Client:
-            def __init__(self, token, check_cancel=None): pass
-            def get_page(self, pid):
-                return {"object": "page", "properties": {
-                    "N": {"type": "title", "title": [{"plain_text": "P"}]}}}
-            def get_database(self, d): raise AssertionError
-            def get_block_children(self, bid): return page_blocks
-
-        monkeypatch.setattr("notion_to_anki.notion.client.NotionClient", Client)
+        monkeypatch.setattr("notion_to_anki.notion.client.NotionClient",
+                            make_client(page, page_blocks))
         col = self.RecordingCol()
         sync_mod.run_sync(page_ids=[page], col=col,
                           config={"notion_token": "t", "page_ids": [page]})
@@ -456,14 +472,16 @@ class TestLazyDeckCreation:
 
     def test_page_with_cards_still_creates_its_deck(self, map_file, monkeypatch):
         col = self._run(monkeypatch, [
-            {"id": "t1", "type": "toggle", "has_children": False,
+            {"id": "t1", "type": "toggle", "has_children": True,
+             "children": [_answer()],
              "toggle": {"rich_text": [{"plain_text": "Q", "annotations": {},
                                        "type": "text", "text": {"content": "Q"}}]}}])
         assert col.decks_made == ["P"]
 
     def test_deck_created_once_not_per_card(self, map_file, monkeypatch):
         col = self._run(monkeypatch, [
-            {"id": f"t{i}", "type": "toggle", "has_children": False,
+            {"id": f"t{i}", "type": "toggle", "has_children": True,
+             "children": [_answer()],
              "toggle": {"rich_text": [{"plain_text": f"Q{i}", "annotations": {},
                                        "type": "text", "text": {"content": f"Q{i}"}}]}}
             for i in range(5)])
@@ -791,6 +809,62 @@ class TestRateLimitHandling:
         with pytest.raises(c.NotionError):
             c.NotionClient("tok")._send(object())
         assert calls["n"] == 1, "a bad token must fail immediately, not retry"
+
+
+class TestAnswerlessCards:
+    """Real complaint: cards showing a question with nothing on the back.
+    'Caval opening at T8' is an empty toggle in Notion, so the card was useless."""
+
+    def _toggle(self, front="Q", children=None):
+        t = {"id": "t1", "type": "toggle", "has_children": bool(children),
+             "toggle": {"rich_text": [{"plain_text": front, "annotations": {},
+                                       "type": "text", "text": {"content": front}}]}}
+        if children:
+            t["children"] = children
+        return t
+
+    def _run(self, monkeypatch, blocks):
+        page = "a" * 32
+        monkeypatch.setattr("notion_to_anki.notion.client.NotionClient",
+                            make_client(page, blocks))
+        monkeypatch.setattr(sync_mod, "_process_media", lambda c, *a, **k: c)
+        col = FakeCol()
+        return sync_mod.run_sync(page_ids=[page], col=col,
+                                 config={"notion_token": "t", "page_ids": [page]}), col
+
+    def test_empty_toggle_makes_no_card(self, map_file, monkeypatch):
+        r, col = self._run(monkeypatch, [self._toggle("Caval opening at T8")])
+        assert r.added == 0 and col.notes == []
+        assert r.skipped == 1
+        assert any("Caval opening at T8" in w and "no answer" in w for w in r.warnings)
+
+    def test_toggle_with_only_empty_tags_makes_no_card(self, map_file, monkeypatch):
+        empty_para = {"id": "p", "type": "paragraph", "has_children": False,
+                      "paragraph": {"rich_text": []}}
+        r, col = self._run(monkeypatch, [self._toggle("Q", [empty_para])])
+        assert r.added == 0 and r.skipped == 1
+
+    def test_image_only_answer_is_kept(self, map_file, monkeypatch):
+        """An answer that is just a diagram is perfectly valid."""
+        img = {"id": "i", "type": "image", "has_children": False,
+               "image": {"file": {"url": "https://x/a.png"}}}
+        r, col = self._run(monkeypatch, [self._toggle("What is this?", [img])])
+        assert r.added == 1, "a picture answer must not be treated as empty"
+
+    def test_normal_card_unaffected(self, map_file, monkeypatch):
+        r, col = self._run(monkeypatch, [self._toggle("Q", [_answer("real answer")])])
+        assert r.added == 1 and r.skipped == 0 and r.warnings == []
+
+
+class TestHasContent:
+    def test_recognises_emptiness(self):
+        for html in ["", "<p></p>", "<p>  </p>", "<ul></ul>", "&nbsp;", "<div><p></p></div>"]:
+            assert not sync_mod._has_content(html), html
+
+    def test_recognises_content(self):
+        for html in ["<p>hi</p>", '<img src="a.png">', "[sound:a.mp3]",
+                     "<p></p><img src=\"x.png\">", "text"]:
+            assert sync_mod._has_content(html), html
 
 
 class TestIndexExistingNotes:

@@ -34,3 +34,6 @@ published to AnkiWeb yet.
   giving up after a few seconds.
 - 2026-09-06 — Items that were skipped rather than broken are now listed
   separately from errors, so a healthy sync no longer reports "8 error(s)".
+- 2026-09-06 — A toggle with no answer in Notion no longer becomes a card you
+  cannot study; the summary names the question so you can fill it in instead.
+  An answer that is only a picture still counts as a real answer.

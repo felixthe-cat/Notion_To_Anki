@@ -21,6 +21,7 @@ Designed to run off the main thread via aqt QueryOp.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 
@@ -206,13 +207,23 @@ def run_sync(
             _card_progress()
             try:
                 card = toggle_to_card(toggle_block)
-                if not card.front.strip():
+                if not _has_content(card.front):
                     result.skipped += 1
+                    result.warnings.append(
+                        f"'{deck_name}': a toggle has an empty question - skipped")
                     continue
                 card = _process_media(card, toggle_block, col,
                                       ingest_image, image_block_url,
                                       ingest_audio, audio_block_url,
                                       _check_cancel, result.errors, media_map)
+                # An answer-less card cannot be studied. Say which one, so the
+                # user can fill it in Notion instead of finding it mid-review.
+                if not _has_content(card.back) and not _has_content(card.extra):
+                    result.skipped += 1
+                    result.warnings.append(
+                        f"'{deck_name}': \"{_plain(card.front)}\" has no answer "
+                        f"in Notion - card not created")
+                    continue
                 was_known = card.notion_block_id in id_map
                 upsert_card(col, card, get_deck(), model, id_map)
                 if was_known:
@@ -338,6 +349,27 @@ def run_sync(
             result.errors.append(f"Could not save the synced-card index: {exc}")
 
     return result
+
+
+_TAGS = re.compile(r"<[^>]+>")
+
+
+def _has_content(html: str) -> bool:
+    """True if this HTML would actually show the reader something.
+
+    Media counts: a card whose answer is just a diagram is perfectly good. An
+    answer that is only empty tags is not — that toggle is empty in Notion.
+    """
+    if not html:
+        return False
+    if "<img" in html or "[sound:" in html:
+        return True
+    return bool(_TAGS.sub("", html).replace("&nbsp;", " ").strip())
+
+
+def _plain(html: str, limit: int = 60) -> str:
+    text = _TAGS.sub("", html).replace("&nbsp;", " ").strip()
+    return text[:limit] + ("..." if len(text) > limit else "")
 
 
 def _count_images(blocks: list[dict]) -> int:
