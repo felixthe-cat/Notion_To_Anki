@@ -1,5 +1,32 @@
 # Devlog
 
+### 2026-09-06 17:04 — Repairing the expiring-image cards in the live collection
+**Goal:** repair the existing broken images, and explain the cause.
+**Changed:** No source files. This entry records an operation on the user's own
+collection, not a code change.
+**Worked:** Took two backups first - `med_testing_backup_before_image_repair.apkg`
+(196 KB, with scheduling) and a raw copy of `collection.anki2` (6.2 MB), both in
+Documents. Recorded the pre-repair state: 208 synced notes, 11 local images,
+118 image references still pointing at expiring links. Closed Anki and started a
+re-sync of the eMRCS page against the real collection, deck_root "med testing" so
+new cards land beside the existing ones. Notes match on their stored
+NotionBlockId, so existing cards update in place - no duplicates, no decks moved,
+review history untouched. Running under **Anki's own bundled Python (25.09.5)**
+rather than the repo venv (26.08.1): a newer anki library can upgrade the
+collection schema and lock the user out of their own Anki.
+Also confirmed the root cause concretely rather than from memory: Notion signs
+image URLs with `X-Amz-Expires=3600`, and `_escape_attr` rewrites the `&`
+separators to `&amp;` when the URL goes into the `src` attribute, so the old
+substitution - which searched for the raw URL - never matched. The image was
+downloaded and then orphaned while the card kept the link that died an hour later.
+**Dead ends:** Redirected stdout through a `TextIOWrapper` without line
+buffering, so the log stayed empty and the run looked dead; confirmed it was
+alive via process CPU/memory and the growing media folder instead.
+**Open:** Repair still in progress. Verify afterwards that remote image
+references reach 0, no media is missing, and the note count has not jumped.
+The 16 broken images under `Testing::*` come from a different Notion page whose
+id we do not have, so they are out of scope for this repair.
+
 ### 2026-09-06 16:52 — 1.3.0: answer-less cards, and diagnosing the reported blanks
 **Goal:** user reviewed real cards and reported broken photos, cards blank on
 both sides, and cards with a question but no answer.
