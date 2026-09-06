@@ -67,3 +67,34 @@ A single clean sync of the eMRCS page (roughly 1,500 requests over 22 minutes)
 produced **zero** 429s. The throttling that motivated ADR-2 came from two
 concurrent syncs sharing one integration, not from normal use. The reactive
 choice stands and option 3 (adding pacing) is not warranted.
+
+### ADR-3: Skip toggles that have no answer, rather than importing them anyway
+**Context**
+A user reviewing real cards hit questions with nothing on the back. Checked at
+source: "Caval opening at T8" is a toggle with zero children in Notion. The
+add-on imported it faithfully and produced a card that cannot be studied and
+gives no clue which Notion page it came from.
+
+**Options considered**
+1. Keep importing it and only add a warning.
+   Drawback: the useless card still lands in the review queue. The user meets
+   it mid-session, which is exactly the complaint.
+2. Skip it and name the question in the summary. (chosen)
+   Drawback: a card the user expected can silently not appear. Mitigated by
+   naming the exact question and deck in the summary, so it is reported rather
+   than absent.
+3. Import it with placeholder text such as "(no answer in Notion)".
+   Drawback: writes invented content into the user's collection, and the
+   placeholder becomes the answer they are tested on.
+
+**Decision**
+Option 2. An unanswerable card has negative value during review, whereas a
+named warning is actionable: it points at the Notion toggle to fill in. Media
+counts as content, so a diagram-only answer is still a real answer - without
+that carve-out this rule would have discarded every picture card.
+
+**Consequences / guard**
+If users report cards they expected going missing, or if `_has_content` is ever
+found treating legitimate content as empty (embeds, equations, or a future
+block type that renders without text or an `<img>`), revisit and prefer
+option 1.
