@@ -1,5 +1,37 @@
 # Devlog
 
+### 2026-09-06 17:31 — Image repair round 1, and the orphaned-source discovery
+**Goal:** repair the broken images in the live collection.
+**Changed:** No source files. Operations on the user's collection.
+**Worked:** First repair (re-sync of the eMRCS root page, 20.8 min) took the
+collection from 208 notes / 11 local images / 118 broken to 463 notes / 301
+local / 79 broken, with **0 missing media files, 0 errors and no duplication**
+(460 unique block ids across 463 notes; the 3 duplicates are the pre-existing
+`Testing::*` pair left out of scope). added=255 updated=47 - the high add count
+is the source page having grown, not duplication.
+Chased the 79 leftovers instead of declaring victory. Picked one, confirmed the
+toggle still exists in Notion and that `collect_top_level_toggles` **does** pick
+it up - so the converter was fine. Then walked down from the configured root
+(24 sub-pages, then 584) and the page was **never reached**. There are two
+copies of this content in the workspace: the current book under the root, and an
+older set of pages outside it. `run_sync` only ever descends from the configured
+root, so those pages are invisible to it and their cards keep whatever links
+they last had. Checked whether the 56 affected notes were redundant: **zero have
+a working twin**, so deleting them would have destroyed unique content.
+Repair round 2 now runs: for each broken note, ask Notion for its block's parent
+page and sync those pages directly. Matching is still by NotionBlockId, so decks
+and scheduling are untouched.
+**Dead ends:** Ancestry walk via `parent.page_id` stopped after one hop, because
+a nested `child_page`'s parent is a *block*, not a page - it looked like the
+pages were orphaned at the top level when they were not. The reachability walk
+from the root is what actually settled it. Also: `python -u` did not unbuffer the
+logs, because the script replaces `sys.stdout` with its own buffered wrapper.
+**Open:** Round 2 in flight; afterwards verify broken references drop, media is
+complete, and the note count has not jumped. The 16 under `Testing::*` come from
+a page whose id we do not have. Consider surfacing "source page no longer under
+your configured root" as a warning - a user cannot currently tell that a card
+has been silently abandoned.
+
 ### 2026-09-06 17:04 — Repairing the expiring-image cards in the live collection
 **Goal:** repair the existing broken images, and explain the cause.
 **Changed:** No source files. This entry records an operation on the user's own
