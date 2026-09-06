@@ -1,5 +1,22 @@
 # Devlog
 
+### 2026-09-06 23:21 — Merge to main; AnkiWeb listing copy
+**Goal:** "draft the description, and merge to main".
+**Changed:**
+- Merged `fix/cross-machine-crash-and-media` into `main` via PR #1 (8 commits,
+  13 files, +1996/-139). `main` was still at the Stop-button commit, so the
+  GitHub support link on the AnkiWeb listing was showing code without any of
+  the fixes.
+- `docs/ANKIWEB_LISTING.md` — description copy plus the branch settings.
+**Worked:** Ran the suite before opening the PR (99 pass) and verified `main`
+afterwards carries v1.3.0 and every fix marker. Fact-checked all 13 feature
+claims in the description against the built `.ankiaddon` rather than trusting
+the old listing text - all confirmed present.
+**Dead ends:** none.
+**Open:** The listing still needs the branch range corrected from the legacy
+`2.1.0 - 2.1.54` to `23.10 - 25.09`; saved as-is, no modern Anki could install
+it. Upload remains manual.
+
 ### 2026-09-06 17:38 — Image repair complete: 118 broken -> 17, all remaining out of reach
 **Goal:** finish repairing the broken images.
 **Changed:** No source files. Operations on the user's collection.
