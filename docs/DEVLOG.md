@@ -1,5 +1,26 @@
 # Devlog
 
+### 2026-09-06 15:54 — Release 1.2.0: commit, package, deploy
+**Goal:** "update the package so that other people using this add-on will be updated too".
+**Changed:**
+- `notion_to_anki/manifest.json` — 1.1.0 -> 1.2.0 (1.1.0 was never published).
+- `NotionSync_for_Anki.ankiaddon` rebuilt, 21 entries, no state, no token.
+**Worked:** Committed the cross-machine batch as c4d944b and pushed; remote hash
+verified against local. Fresh-install simulation still passes on the 1.2.0
+package. Deployed and confirmed all 21 installed files are byte-identical to the
+repo, Anki restarts clean, and the real collection is untouched by the test runs
+(208 synced notes, zero eMRCS decks - every run used a temp collection).
+**Dead ends:** Told the user my add-on was breaking AnkiConnect, based on one
+startup where the API did not answer within 80s while a disabled-add-on restart
+answered in 2s. That was a bad inference from a single slow start: with the
+add-on enabled a clean restart answers in **3s**, and the add-on imports and
+registers all three hooks fine. The slow start was almost certainly recovery
+work after I had killed Anki mid-operation several times. Separately, a
+`sha256sum` comparison reported every deployed file as different - it was
+failing on the Windows path and comparing against an empty string; the Python
+comparison is the trustworthy one.
+**Open:** AnkiWeb upload is manual - no API, needs a browser login.
+
 ### 2026-09-06 15:46 — Clean acceptance run; warnings split from errors
 **Goal:** finish verification, then commit and repackage.
 **Changed:**
